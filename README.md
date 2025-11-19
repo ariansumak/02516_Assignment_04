@@ -37,11 +37,12 @@ All outputs are written to `outputs/part1/` by default:
    pip install -r requirements.txt
    ```
 
-2. Run the pipeline (edit the dataset path to match your environment):
+2. Run the pipeline. The script looks for the dataset under
+   `/home/arian-sumak/Documents/DTU` by default; override `--dataset-root`
+   if you keep it elsewhere.
 
    ```bash
    python run_part1_pipeline.py \
-       --dataset-root /dtu/datasets1/02516/potholes \
        --split train \
        --output-dir outputs/part1 \
        --visualization-count 6 \
@@ -57,6 +58,8 @@ The saved JSON files can be re-used by the notebooks or scripts you build for Pa
 * The dataset loader expects Pascal VOC style XML files and a `splits.json` file that
   maps split names (`train`, `val`, `test`) to image identifiers. If `splits.json`
   is missing, every image will be treated as part of the selected split.
+* All dataset access goes through the shared `dataloader/PotholeDataset.py` PyTorch
+  loader so the training code in later parts can reuse the exact same data interface.
 * OpenCV with `ximgproc` (from `opencv-contrib-python`) is used when available.
   Otherwise the pure-python `selectivesearch` implementation kicks in automatically.
 * The code is intentionally modular so later parts can import `pothole_proposals`

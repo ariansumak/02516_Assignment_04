@@ -5,7 +5,16 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence
+import sys
 import xml.etree.ElementTree as ET
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+try:
+    from dataloader.PotholeDataset import PotholeDataset
+except ModuleNotFoundError:  # pragma: no cover - ensures notebooks can import
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.append(str(PROJECT_ROOT))
+    from dataloader.PotholeDataset import PotholeDataset
 
 
 LOGGER = logging.getLogger(__name__)
@@ -184,12 +193,6 @@ class DatasetIndex:
         self.records = self._build_records()
 
     def _build_records(self) -> List[ImageRecord]:
-        image_files = {
-            image.stem: image
-            for image in self.images_dir.glob("*")
-            if image.suffix.lower() in {".jpg", ".jpeg", ".png"}
-        }
-
         selected_ids = load_split_ids(self.splits_path, self.split)
         if not selected_ids:
             LOGGER.warning(
@@ -197,39 +200,60 @@ class DatasetIndex:
                 self.split,
                 self.splits_path,
             )
-            selected_ids = sorted(image_files.keys())
+            selected_ids = None
 
+        dataset = PotholeDataset(
+            img_dir=str(self.images_dir),
+            ann_dir=str(self.annotations_dir),
+            transforms=None,
+            allowed_ids=selected_ids,
+            to_tensor=False,
+        )
+
+        selected_set = set(selected_ids) if selected_ids else None
         records: List[ImageRecord] = []
-        for image_id in selected_ids:
-            img_path = image_files.get(image_id)
-            if img_path is None:
-                LOGGER.warning("Image '%s' from split not found on disk", image_id)
+        for idx in range(len(dataset)):
+            img, target = dataset[idx]
+            filename = target.get("filename", "")
+            image_id = Path(filename).stem
+            if selected_set and image_id not in selected_set:
                 continue
-            ann_path = self._find_annotation(image_id)
 
-            width = height = 0
-            annotations: Sequence[BoundingBox] = ()
-            if ann_path and ann_path.exists():
-                width, height, annotations = parse_voc_annotation(ann_path)
+            ann_path = Path(dataset.ann_paths[idx])
+            image_path = Path(target.get("image_path", dataset.img_dir / filename))
+            width, height = target.get("size", (0, 0))
+
+            boxes_tensor = target.get("boxes")
+            labels_tensor = target.get("labels")
+            annotations: List[BoundingBox] = []
+            if boxes_tensor is not None and labels_tensor is not None:
+                boxes = boxes_tensor.tolist()
+                labels = labels_tensor.tolist()
+                for coords, label_idx in zip(boxes, labels):
+                    x_min, y_min, x_max, y_max = map(int, coords)
+                    label_name = dataset.idx_to_class.get(int(label_idx), str(label_idx))
+                    annotations.append(
+                        BoundingBox(
+                            x_min=x_min,
+                            y_min=y_min,
+                            x_max=x_max,
+                            y_max=y_max,
+                            label=label_name,
+                        )
+                    )
 
             records.append(
                 ImageRecord(
                     image_id=image_id,
-                    image_path=img_path,
+                    image_path=image_path,
                     annotation_path=ann_path,
-                    width=width,
-                    height=height,
-                    annotations=annotations,
+                    width=int(width),
+                    height=int(height),
+                    annotations=tuple(annotations),
                 )
             )
 
         return records
-
-    def _find_annotation(self, image_id: str) -> Optional[Path]:
-        xml_path = self.annotations_dir / f"{image_id}.xml"
-        if xml_path.exists():
-            return xml_path
-        return None
 
     def __len__(self) -> int:
         return len(self.records)

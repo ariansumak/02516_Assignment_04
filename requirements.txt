@@ -4,3 +4,5 @@ Pillow
 tqdm
 matplotlib
 selectivesearch
+torch
+torchvision

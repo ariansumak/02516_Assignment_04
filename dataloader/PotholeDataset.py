@@ -1,6 +1,6 @@
-import os
-import glob
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Optional, Sequence
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -25,25 +25,43 @@ class PotholeDataset(Dataset):
       </annotation>
     """
 
-    def __init__(self, img_dir, ann_dir, transforms=None):
+    def __init__(
+        self,
+        img_dir,
+        ann_dir,
+        transforms=None,
+        allowed_ids: Optional[Sequence[str]] = None,
+        to_tensor: bool = True,
+    ):
         """
         Args:
             img_dir (str): directory with images.
             ann_dir (str): directory with XML annotation files.
             transforms (callable, optional): function taking PIL image and
                 target dict, and returning transformed (image, target).
+            allowed_ids (Sequence[str], optional): restrict the dataset to the
+                file stems present in this iterable.
+            to_tensor (bool): if True and no custom transform is supplied, the
+                PIL image is converted to a torch.FloatTensor in [0,1].
         """
-        self.img_dir = img_dir
-        self.ann_dir = ann_dir
+        self.img_dir = Path(img_dir)
+        self.ann_dir = Path(ann_dir)
         self.transforms = transforms
+        self.to_tensor = to_tensor
+        self.allowed_ids = (
+            {Path(item).stem for item in allowed_ids} if allowed_ids is not None else None
+        )
 
         # collect all xml files
-        self.ann_paths = sorted(glob.glob(os.path.join(ann_dir, "*.xml")))
+        self.ann_paths = sorted(self.ann_dir.glob("*.xml"))
+        if self.allowed_ids:
+            self.ann_paths = [path for path in self.ann_paths if path.stem in self.allowed_ids]
         if len(self.ann_paths) == 0:
-            raise RuntimeError(f"No annotation files found in {ann_dir}")
+            raise RuntimeError(f"No annotation files found in {self.ann_dir}")
 
         # one class: pothole -> label 1 (0 is reserved for background)
         self.class_to_idx = {"pothole": 1}
+        self.idx_to_class = {idx: name for name, idx in self.class_to_idx.items()}
 
     def __len__(self):
         return len(self.ann_paths)
@@ -52,14 +70,18 @@ class PotholeDataset(Dataset):
         ann_path = self.ann_paths[idx]
 
         # --- parse XML ---
-        tree = ET.parse(ann_path)
+        tree = ET.parse(str(ann_path))
         root = tree.getroot()
 
-        filename = root.find("filename").text
-        img_path = os.path.join(self.img_dir, filename)
+        filename_node = root.find("filename")
+        filename = (
+            filename_node.text if filename_node is not None else f"{Path(ann_path).stem}.jpg"
+        )
+        img_path = self.img_dir / filename
 
         # read image
         img = Image.open(img_path).convert("RGB")
+        width, height = img.size
 
         boxes = []
         labels = []
@@ -101,12 +123,14 @@ class PotholeDataset(Dataset):
             "image_id": image_id,
             "area": areas,           # (N,)
             "difficults": difficults,      # (N,)
+            "image_path": str(img_path),
+            "size": (width, height),
         }
 
         # default: convert PIL image to tensor [0,1]
         if self.transforms is not None:
             img, target = self.transforms(img, target)
-        else:
+        elif self.to_tensor:
             img = F.to_tensor(img)
 
         return img, target
@@ -122,9 +146,9 @@ def collate_fn(batch):
 # ---------- Example usage ----------
 
 if __name__ == "__main__":
-    # Example directories (change to your real paths):
-    img_dir = r"C:\Users\lucas\PycharmProjects\02516_Assignment_04\data\potholes\images"          # where potholes0.png lives
-    ann_dir = r"C:\Users\lucas\PycharmProjects\02516_Assignment_04\data\potholes\annotations"          # where potholes0.xml lives
+    base_dir = Path("/home/arian-sumak/Documents/DTU/potholes")
+    img_dir = base_dir / "images"
+    ann_dir = base_dir / "annotations"
 
     dataset = PotholeDataset(img_dir=img_dir, ann_dir=ann_dir)
 

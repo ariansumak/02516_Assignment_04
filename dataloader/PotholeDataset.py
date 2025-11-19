@@ -146,7 +146,7 @@ def collate_fn(batch):
 # ---------- Example usage ----------
 
 if __name__ == "__main__":
-    base_dir = Path("/home/arian-sumak/Documents/DTU/potholes")
+    base_dir = Path(r"C:\Users\pablo\Documents\COPENAGUE\VISUAL\02516_Assignment_04\data")
     img_dir = base_dir / "images"
     ann_dir = base_dir / "annotations"
 

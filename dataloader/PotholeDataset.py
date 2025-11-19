@@ -123,8 +123,8 @@ def collate_fn(batch):
 
 if __name__ == "__main__":
     # Example directories (change to your real paths):
-    img_dir = r"C:\Users\lucas\PycharmProjects\02516_Assignment_04\data\potholes\images"          # where potholes0.png lives
-    ann_dir = r"C:\Users\lucas\PycharmProjects\02516_Assignment_04\data\potholes\annotations"          # where potholes0.xml lives
+    img_dir = r"C:\Users\pablo\Documents\COPENAGUE\VISUAL\02516_Assignment_04\data\images"          # where potholes0.png lives
+    ann_dir = r"C:\Users\pablo\Documents\COPENAGUE\VISUAL\02516_Assignment_04\data\annotations"          # where potholes0.xml lives
 
     dataset = PotholeDataset(img_dir=img_dir, ann_dir=ann_dir)
 

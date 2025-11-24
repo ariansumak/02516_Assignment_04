@@ -20,11 +20,11 @@ requirements.txt       # Python dependencies (install inside a virtualenv)
 
 All outputs are written to `outputs/part1/` by default:
 
-* `visualizations/` – images with the ground-truth boxes overlaid (Task 1).
-* `proposals/<split>/` – JSON files with the raw proposals per image (Task 2).
-* `evaluation/recall.json` – aggregated recall figures to determine how many proposals
+- `visualizations/` – images with the ground-truth boxes overlaid (Task 1).
+- `proposals/<split>/` – JSON files with the raw proposals per image (Task 2).
+- `evaluation/recall.json` – aggregated recall figures to determine how many proposals
   are required per image (Task 3).
-* `training_proposals/<split>/` – proposals annotated as *pothole* or *background*
+- `training_proposals/<split>/` – proposals annotated as _pothole_ or _background_
   which form the input to the detector training code you will build in Part 2 (Task 4).
 
 ## Getting started
@@ -55,15 +55,21 @@ The saved JSON files can be re-used by the notebooks or scripts you build for Pa
 
 ## Notes
 
-* The dataset loader expects Pascal VOC style XML files and a `splits.json` file that
+- The dataset loader expects Pascal VOC style XML files and a `splits.json` file that
   maps split names (`train`, `val`, `test`) to image identifiers. If `splits.json`
   is missing, every image will be treated as part of the selected split.
-* All dataset access goes through the shared `dataloader/PotholeDataset.py` PyTorch
+- All dataset access goes through the shared `dataloader/PotholeDataset.py` PyTorch
   loader so the training code in later parts can reuse the exact same data interface.
-* OpenCV with `ximgproc` (from `opencv-contrib-python`) is used when available.
+- OpenCV with `ximgproc` (from `opencv-contrib-python`) is used when available.
   Otherwise the pure-python `selectivesearch` implementation kicks in automatically.
-* The code is intentionally modular so later parts can import `pothole_proposals`
+- The code is intentionally modular so later parts can import `pothole_proposals`
   utilities without modifications.
 
 Please refer to the inline documentation and comments in the sources for additional
 details on each processing step.
+
+For the test :
+
+```
+python test_pothole_dataset.py --max-images 3
+```

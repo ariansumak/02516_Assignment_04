@@ -12,6 +12,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+DEFAULT_DATASET_ROOT = Path(r"C:\Users\pablo\Documents\COPENAGUE\VISUAL\02516_Assignment_04\data")
+
 from tqdm import tqdm
 
 from pothole_proposals.dataset import DatasetIndex
@@ -26,7 +28,12 @@ LOGGER = logging.getLogger("part1")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DTU 02516 – Proposal pipeline (Part 1)")
-    parser.add_argument("--dataset-root", required=True, type=Path, help="Path to the potholes dataset")
+    parser.add_argument(
+        "--dataset-root",
+        default=DEFAULT_DATASET_ROOT,
+        type=Path,
+        help="Path to the potholes dataset root (defaults to /home/arian-sumak/Documents/DTU)",
+    )
     parser.add_argument("--split", default="train", help="Dataset split to process")
     parser.add_argument("--output-dir", default=Path("outputs/part1"), type=Path, help="Destination for generated files")
     parser.add_argument("--visualization-count", type=int, default=6, help="How many images to visualise for Task 1")

@@ -46,12 +46,13 @@ def generate_selective_search_proposals(
     if _HAVE_XIMGPROC:
         return _generate_with_opencv(image, mode, max_proposals, min_size)
 
-    if selectivesearch is None:
-        raise RuntimeError(
-            "Neither OpenCV (with ximgproc) nor the 'selectivesearch' package is available"
-        )
+    if selectivesearch is not None:
+        return _generate_with_python(image, max_proposals, min_size)
 
-    return _generate_with_python(image, max_proposals, min_size)
+    LOGGER.warning(
+        "Selective Search dependencies missing – using sliding-window fallback proposals"
+    )
+    return _generate_with_sliding_windows(image, max_proposals, min_size)
 
 
 def _generate_with_opencv(
@@ -100,4 +101,58 @@ def _generate_with_python(
         boxes.append((int(x), int(y), int(x + w), int(y + h)))
         if len(boxes) >= max_proposals:
             break
+    return boxes
+
+
+def _generate_with_sliding_windows(
+    image: np.ndarray,
+    max_proposals: int,
+    min_size: int,
+) -> List[Box]:
+    """
+    Dependency-free fallback that enumerates sliding-window boxes at multiple scales.
+
+    While much simpler than Selective Search, this still provides deterministic coverage
+    so the rest of the pipeline (evaluation, labelling) can run without extra packages.
+    """
+
+    height, width = image.shape[:2]
+    if height == 0 or width == 0:
+        return []
+
+    min_size = max(8, int(min_size))
+    short_edge = min(height, width)
+
+    # Build a list of window sizes anchored to the dataset resolution.
+    base_sizes = [min_size]
+    while base_sizes[-1] < short_edge:
+        base_sizes.append(int(base_sizes[-1] * 1.6))
+
+    aspect_ratios = [
+        (1.0, 1.0),
+        (1.5, 1.0),
+        (1.0, 1.5),
+        (2.0, 1.0),
+        (1.0, 2.0),
+    ]
+
+    boxes: List[Box] = []
+    for size in base_sizes:
+        for ratio_w, ratio_h in aspect_ratios:
+            win_w = int(size * ratio_w)
+            win_h = int(size * ratio_h)
+            if win_w < min_size or win_h < min_size:
+                continue
+            if win_w > width or win_h > height:
+                continue
+
+            stride_x = max(4, win_w // 4)
+            stride_y = max(4, win_h // 4)
+
+            for y in range(0, height - win_h + 1, stride_y):
+                for x in range(0, width - win_w + 1, stride_x):
+                    boxes.append((x, y, x + win_w, y + win_h))
+                    if len(boxes) >= max_proposals:
+                        return boxes
+
     return boxes

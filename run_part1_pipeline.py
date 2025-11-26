@@ -12,7 +12,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-DEFAULT_DATASET_ROOT = Path(r"C:\Users\pablo\Documents\COPENAGUE\VISUAL\02516_Assignment_04\data")
+DEFAULT_DATASET_ROOT = Path(r"/home/arian-sumak/Documents/DTU/computer vision/potholes_local_copy")
 
 from tqdm import tqdm
 

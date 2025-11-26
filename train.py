@@ -12,6 +12,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 from torchvision import models
 from torchvision.models import ResNet18_Weights
 from tqdm import tqdm
@@ -89,6 +90,11 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Training device – defaults to auto-detecting CUDA",
     )
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable mixed-precision training (only effective on CUDA)",
+    )
     return parser.parse_args()
 
 
@@ -141,6 +147,9 @@ def train_one_epoch(
     device: torch.device,
     epoch: int,
     background_idx: int,
+    *,
+    use_amp: bool,
+    scaler: Optional[GradScaler],
 ) -> Dict[str, float]:
     model.train()
     running_cls = 0.0
@@ -154,23 +163,35 @@ def train_one_epoch(
         targets = targets.to(device, non_blocking=True)
         has_target = has_target.to(device, non_blocking=True) > 0.5
 
-        optimiser.zero_grad()
-        logits, bbox_preds = model(images)
-        cls_loss = criterion(logits, labels)
-        reg_targets = encode_boxes(proposals, targets)
-        positive_mask = (labels != background_idx) & has_target
-        if positive_mask.any():
-            bbox_loss = F.smooth_l1_loss(bbox_preds[positive_mask], reg_targets[positive_mask])
-        else:
-            bbox_loss = torch.tensor(0.0, device=device)
-        loss = cls_loss + bbox_loss
-        loss.backward()
-        optimiser.step()
+        optimiser.zero_grad(set_to_none=True)
+        with autocast(enabled=use_amp):
+            logits, bbox_preds = model(images)
+            cls_loss = criterion(logits, labels)
+            reg_targets = encode_boxes(proposals, targets)
+            positive_mask = (labels != background_idx) & has_target
+            if positive_mask.any():
+                bbox_loss = F.smooth_l1_loss(bbox_preds[positive_mask], reg_targets[positive_mask])
+            else:
+                bbox_loss = torch.tensor(0.0, device=device)
+            loss = cls_loss + bbox_loss
 
-        running_cls += cls_loss.item() * images.size(0)
-        running_bbox += bbox_loss.item() * images.size(0)
-        running_total += loss.item() * images.size(0)
-        progress.set_postfix(loss=loss.item(), cls=cls_loss.item(), bbox=bbox_loss.item())
+        if use_amp:
+            assert scaler is not None
+            scaler.scale(loss).backward()
+            scaler.step(optimiser)
+            scaler.update()
+        else:
+            loss.backward()
+            optimiser.step()
+
+        cls_val = float(cls_loss.detach())
+        bbox_val = float(bbox_loss.detach())
+        total_val = cls_val + bbox_val
+
+        running_cls += cls_val * images.size(0)
+        running_bbox += bbox_val * images.size(0)
+        running_total += total_val * images.size(0)
+        progress.set_postfix(loss=total_val, cls=cls_val, bbox=bbox_val)
     dataset_size = max(1, len(loader.dataset))
     return {
         "loss": running_total / dataset_size,
@@ -186,6 +207,8 @@ def evaluate(
     device: torch.device,
     idx_to_class: Dict[int, str],
     background_idx: int,
+    *,
+    use_amp: bool,
 ) -> Dict[str, object]:
     model.eval()
     correct = 0
@@ -203,7 +226,8 @@ def evaluate(
         targets = targets.to(device, non_blocking=True)
         has_target = has_target.to(device, non_blocking=True) > 0.5
 
-        logits, bbox_preds = model(images)
+        with autocast(enabled=use_amp and device.type == "cuda"):
+            logits, bbox_preds = model(images)
         preds = logits.argmax(dim=1)
         matches = preds == labels
         correct += matches.sum().item()
@@ -213,15 +237,16 @@ def evaluate(
             if match:
                 per_class_correct[label] = per_class_correct.get(label, 0) + 1
 
-        cls_loss = F.cross_entropy(logits, labels, reduction="mean")
-        reg_targets = encode_boxes(proposals, targets)
-        positive_mask = (labels != background_idx) & has_target
-        if positive_mask.any():
-            bbox_loss = F.smooth_l1_loss(bbox_preds[positive_mask], reg_targets[positive_mask])
-        else:
-            bbox_loss = torch.tensor(0.0, device=device)
-        running_cls += cls_loss.item() * images.size(0)
-        running_bbox += bbox_loss.item() * images.size(0)
+        with autocast(enabled=use_amp and device.type == "cuda"):
+            cls_loss = F.cross_entropy(logits, labels, reduction="mean")
+            reg_targets = encode_boxes(proposals, targets)
+            positive_mask = (labels != background_idx) & has_target
+            if positive_mask.any():
+                bbox_loss = F.smooth_l1_loss(bbox_preds[positive_mask], reg_targets[positive_mask])
+            else:
+                bbox_loss = torch.tensor(0.0, device=device)
+        running_cls += float(cls_loss.detach()) * images.size(0)
+        running_bbox += float(bbox_loss.detach()) * images.size(0)
 
     dataset_size = max(1, len(loader.dataset))
     per_class_accuracy = {
@@ -344,10 +369,16 @@ def main() -> None:
             raise RuntimeError("CUDA requested but no GPU is available")
         device = torch.device(args.device)
     LOGGER.info("Training on %s", device)
+    use_amp = args.amp and device.type == "cuda"
+    if args.amp and device.type != "cuda":
+        LOGGER.warning("AMP requested but CUDA not available; falling back to full precision on CPU")
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
     model = build_model(train_dataset.num_classes, pretrained=not args.no_pretrained).to(device)
     criterion = nn.CrossEntropyLoss()
     optimiser = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     background_idx = train_dataset.class_to_idx.get("background", 0)
+    scaler = GradScaler(enabled=use_amp)
 
     best_val = 0.0
     history: List[Dict[str, object]] = []
@@ -360,6 +391,8 @@ def main() -> None:
             device,
             epoch,
             background_idx,
+            use_amp=use_amp,
+            scaler=scaler,
         )
         metrics = evaluate(
             model,
@@ -367,6 +400,7 @@ def main() -> None:
             device,
             train_dataset.idx_to_class,
             background_idx,
+            use_amp=use_amp,
         )
         metrics.update(
             {

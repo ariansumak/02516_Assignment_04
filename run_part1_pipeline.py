@@ -4,8 +4,10 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import sys
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -81,7 +83,36 @@ def parse_args() -> argparse.Namespace:
         default=0.3,
         help="IoU threshold for labelling a proposal as background",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of parallel worker processes to use for proposal extraction. "
+            "Defaults to the available CPU cores. Set to 1 to disable parallelism."
+        ),
+    )
     return parser.parse_args()
+
+
+def _extract_proposals_for_image(
+    image_id: str,
+    image_path: Path,
+    mode: str,
+    max_proposals: int,
+    min_size: int,
+) -> Tuple[str, List[tuple[int, int, int, int]]]:
+    """Top-level worker function to run Selective Search for a single image.
+
+    Returns a tuple of (image_id, boxes) where boxes are (x1, y1, x2, y2).
+    """
+    boxes = generate_selective_search_proposals(
+        image_path,
+        mode=mode,
+        max_proposals=max_proposals,
+        min_size=min_size,
+    )
+    return image_id, boxes
 
 
 def main() -> None:
@@ -105,24 +136,57 @@ def main() -> None:
     )
     LOGGER.info("Saved %d visualisations to %s", len(saved), visualization_dir)
 
-    # Task 2 – Extract proposals
+    # Task 2 – Extract proposals (optionally in parallel)
     proposals_map: Dict[str, List[tuple[int, int, int, int]]] = {}
-    for record in tqdm(dataset, desc="Extracting proposals"):
-        boxes = generate_selective_search_proposals(
-            record.image_path,
-            mode=args.proposal_mode,
-            max_proposals=args.proposal_limit,
-            min_size=args.min_box_size,
-        )
-        proposals_map[record.image_id] = boxes
-        with open(proposals_dir / f"{record.image_id}.json", "w", encoding="utf-8") as handle:
-            json.dump(
-                {
-                    "image_id": record.image_id,
-                    "boxes": [list(map(int, box)) for box in boxes],
-                },
-                handle,
+    records = list(dataset)
+    workers = args.workers or (os.cpu_count() or 1)
+    if workers < 1:
+        workers = 1
+    LOGGER.info("Using %d worker process(es) for proposal extraction", workers)
+
+    if workers == 1:
+        for record in tqdm(records, desc="Extracting proposals"):
+            _, boxes = _extract_proposals_for_image(
+                record.image_id,
+                record.image_path,
+                args.proposal_mode,
+                args.proposal_limit,
+                args.min_box_size,
             )
+            proposals_map[record.image_id] = boxes
+            with open(proposals_dir / f"{record.image_id}.json", "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "image_id": record.image_id,
+                        "boxes": [list(map(int, box)) for box in boxes],
+                    },
+                    handle,
+                )
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    _extract_proposals_for_image,
+                    record.image_id,
+                    record.image_path,
+                    args.proposal_mode,
+                    args.proposal_limit,
+                    args.min_box_size,
+                )
+                for record in records
+            ]
+
+            for fut in tqdm(as_completed(futures), total=len(futures), desc="Extracting proposals"):
+                image_id, boxes = fut.result()
+                proposals_map[image_id] = boxes
+                with open(proposals_dir / f"{image_id}.json", "w", encoding="utf-8") as handle:
+                    json.dump(
+                        {
+                            "image_id": image_id,
+                            "boxes": [list(map(int, box)) for box in boxes],
+                        },
+                        handle,
+                    )
 
     # Task 3 – Evaluate recall curve
     recall = evaluate_recall_curve(

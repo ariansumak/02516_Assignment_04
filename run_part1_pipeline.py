@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import argparse
 import json
 import logging
@@ -14,7 +20,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if SRC_DIR.exists() and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-DEFAULT_DATASET_ROOT = Path(r"/home/arian-sumak/Documents/DTU/computer vision/potholes_local_copy")
+DEFAULT_DATASET_ROOT = os.getenv('DEFAULT_DATASET_ROOT', Path(r"/home/arian-sumak/Documents/DTU/computer vision/potholes_local_copy"))
 
 from tqdm import tqdm
 

@@ -9,8 +9,7 @@ import matplotlib.pyplot as plt
 from dataloader.PotholeDataset import PotholeDataset, collate_fn
 
 # Allow overriding the dataset location via environment variable.
-DEFAULT_DATA_ROOT = Path(__file__).resolve().parent / "data"
-DATA_ROOT = Path(os.environ.get("POTHOLE_DATA_ROOT", DEFAULT_DATA_ROOT))
+DATA_ROOT = Path(os.environ.get("POTHOLE_DATA_ROOT", Path(__file__).resolve().parent / "data"))
 
 def show_image_with_boxes(img, target):
     """

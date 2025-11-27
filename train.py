@@ -1,4 +1,11 @@
+
 from __future__ import annotations
+
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import argparse
 import json
@@ -19,7 +26,7 @@ from tqdm import tqdm
 
 from dataloader.ProposalDataset import BalancedProposalSampler, ProposalDataset
 
-DEFAULT_DATASET_ROOT = Path(r"/home/arian-sumak/Documents/DTU/computer vision/potholes_local_copy")
+DEFAULT_DATASET_ROOT = os.getenv('DEFAULT_DATASET_ROOT', Path(r"/home/arian-sumak/Documents/DTU/computer vision/potholes_local_copy"))
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 LOGGER = logging.getLogger("proposal_classifier")

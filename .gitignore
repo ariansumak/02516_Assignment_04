@@ -210,3 +210,4 @@ __marimo__/
 data/
 .idea/
 .vscode/
+outputs/part2/classifier/best_model.pt

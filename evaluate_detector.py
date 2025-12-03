@@ -39,7 +39,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", type=Path, default=DEFAULT_DATASET_ROOT, help="Root folder containing images/ and annotations/")
     parser.add_argument("--split", default="test", help="Dataset split to evaluate")
     parser.add_argument("--checkpoint", type=Path, default=Path("eval/best_model"), help="Path to best model checkpoint (file or extracted directory)")
-    parser.add_argument("--proposals-dir", type=Path, default=None, help="Optional directory with pre-computed proposals (.json per image).")
+    parser.add_argument(
+        "--proposals-dir",
+        type=Path,
+        default=Path("outputs/part1/proposals"),
+        help="Directory with pre-computed proposals (defaults to outputs/part1/proposals[/<split>]).",
+    )
+    parser.add_argument(
+        "--require-proposals",
+        action="store_true",
+        help="Do not fall back to generating proposals; raise if a file is missing.",
+    )
     parser.add_argument("--proposal-mode", choices=["fast", "quality"], default="fast", help="Selective Search mode when proposals are generated on the fly")
     parser.add_argument("--proposal-limit", type=int, default=2000, help="Maximum proposals per image")
     parser.add_argument("--min-box-size", type=int, default=20, help="Minimum proposal size (pixels)")
@@ -52,6 +62,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--images-subdir", default="images", help="Dataset images subfolder")
     parser.add_argument("--annotations-subdir", default="annotations", help="Dataset annotations subfolder")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/eval"), help="Where to save detections and metrics")
+    parser.add_argument(
+        "--last-fraction",
+        type=float,
+        default=0.1,
+        help="Evaluate only the last fraction of the available images (sorted by id). Set to 1.0 to use all images.",
+    )
     return parser.parse_args()
 
 
@@ -223,6 +239,27 @@ def run_detector_on_image(
     return [detections[i] for i in keep_indices]
 
 
+def select_eval_subset(records: Sequence[object], proposals_dir: Path | None, fraction: float):
+    fraction = max(0.0, min(1.0, fraction))
+    if fraction == 0.0:
+        raise ValueError("last-fraction must be > 0")
+
+    if proposals_dir and proposals_dir.exists():
+        proposal_ids = {path.stem for path in proposals_dir.glob("*.json")}
+    else:
+        proposal_ids = None
+
+    ids = sorted({getattr(rec, "image_id") for rec in records})
+    if proposal_ids is not None:
+        ids = [img_id for img_id in ids if img_id in proposal_ids]
+    if not ids:
+        return []
+
+    count = max(1, int(round(len(ids) * fraction)))
+    selected_ids = set(ids[-count:])
+    return [rec for rec in records if getattr(rec, "image_id") in selected_ids]
+
+
 def compute_average_precision(
     detections: Sequence[Dict[str, object]],
     ground_truth: Dict[str, List[Box]],
@@ -302,30 +339,41 @@ def main() -> None:
     model.eval()
 
     transform = build_transform(args.image_size)
+    proposals_dir = args.proposals_dir
+    if proposals_dir is not None:
+        split_dir = proposals_dir / args.split
+        if split_dir.exists():
+            proposals_dir = split_dir
+        elif not proposals_dir.exists():
+            LOGGER.warning("Proposals directory %s does not exist; will fall back to generation.", proposals_dir)
+
     dataset = DatasetIndex(
         args.dataset_root,
         split=args.split,
         images_subdir=args.images_subdir,
         annotations_subdir=args.annotations_subdir,
     )
-    LOGGER.info("Loaded %d %s images", len(dataset), args.split)
+    records = select_eval_subset(dataset.records, proposals_dir, args.last_fraction)
+    LOGGER.info("Loaded %d %s images (last %.0f%% of available ids)", len(records), args.split, args.last_fraction * 100)
 
     detections: List[Dict[str, object]] = []
     gt_map: Dict[str, List[Box]] = {
         record.image_id: [
             (box.x_min, box.y_min, box.x_max, box.y_max) for box in record.annotations if box.label != "background"
         ]
-        for record in dataset.records
+        for record in records
     }
 
-    for record in tqdm(dataset.records, desc=f"Running detector on {args.split}"):
+    for record in tqdm(records, desc=f"Running detector on {args.split}"):
         image = Image.open(record.image_path).convert("RGB")
         width = record.width or image.width
         height = record.height or image.height
 
         proposals: List[Box] = []
-        if args.proposals_dir:
-            proposals = load_proposals(record.image_id, args.proposals_dir)
+        if proposals_dir:
+            proposals = load_proposals(record.image_id, proposals_dir)
+        if not proposals and args.require_proposals:
+            raise FileNotFoundError(f"No proposals found for {record.image_id} in {proposals_dir}")
         if not proposals:
             proposals = generate_selective_search_proposals(
                 record.image_path,
@@ -360,8 +408,9 @@ def main() -> None:
         "split": args.split,
         "ap": ap,
         "ap_iou_threshold": args.ap_iou,
-        "num_images": len(dataset),
+        "num_images": len(records),
         "num_detections": len(detections),
+        "last_fraction": args.last_fraction,
     }
 
     det_path = args.output_dir / f"{args.split}_detections.json"
